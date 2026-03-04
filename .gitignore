@@ -1,0 +1,6 @@
+/target
+.flowstate.db
+.flowstate.db-journal
+.flowstate.db-wal
+*.swp
+*.swo
