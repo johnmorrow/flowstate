@@ -1,6 +1,12 @@
 # Flowstate
 
-A task management CLI for AI agents. Supports one-time, daily, weekly, recurring, and deadline-based tasks with hierarchical breakdowns.
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Built with Rust](https://img.shields.io/badge/Built_with-Rust-dea584.svg)](https://www.rust-lang.org/)
+[![SQLite](https://img.shields.io/badge/Storage-SQLite-003B57.svg)](https://www.sqlite.org/)
+
+> **Agent-first task management for the command line.**
+
+A structured task management CLI designed for AI agents. Supports one-time, daily, weekly, recurring, and deadline-based tasks with hierarchical breakdowns, metadata, and file attachments.
 
 ## Installation
 
