@@ -13,6 +13,10 @@ pub fn generate_task_id() -> String {
     format!("tk_{}", nanoid!(8, ID_ALPHABET))
 }
 
+pub fn generate_attachment_id() -> String {
+    format!("at_{}", nanoid!(8, ID_ALPHABET))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
@@ -98,8 +102,27 @@ pub struct Task {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
     pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "is_empty_object")]
+    pub metadata: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+fn is_empty_object(v: &serde_json::Value) -> bool {
+    v.as_object().is_some_and(|m| m.is_empty())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Attachment {
+    pub id: String,
+    pub task_id: String,
+    pub name: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<i64>,
+    pub created_at: DateTime<Utc>,
 }
 
 impl Task {

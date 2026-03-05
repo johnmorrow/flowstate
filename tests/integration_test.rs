@@ -606,6 +606,235 @@ fn test_recurring_with_recur_rule() {
 }
 
 #[test]
+fn test_add_with_metadata() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = flowstate(&tmp)
+        .args([
+            "task",
+            "add",
+            "Task with meta",
+            "--metadata",
+            r#"{"key":"value","num":42}"#,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let task: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(task["title"], "Task with meta");
+    assert_eq!(task["metadata"]["key"], "value");
+    assert_eq!(task["metadata"]["num"], 42);
+
+    // Get should also return metadata
+    let id = task["id"].as_str().unwrap();
+    let output = flowstate(&tmp)
+        .args(["task", "get", id, "--json"])
+        .output()
+        .unwrap();
+    let fetched: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(fetched["metadata"]["key"], "value");
+}
+
+#[test]
+fn test_update_metadata() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = flowstate(&tmp)
+        .args(["task", "add", "Meta task", "--json"])
+        .output()
+        .unwrap();
+    let task: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let id = task["id"].as_str().unwrap();
+
+    // Task without metadata should not have metadata key in JSON (skip_serializing_if)
+    assert!(task.get("metadata").is_none());
+
+    // Update with metadata
+    let output = flowstate(&tmp)
+        .args([
+            "task",
+            "update",
+            id,
+            "--metadata",
+            r#"{"agent":"claude","context":"test"}"#,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let updated: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(updated["metadata"]["agent"], "claude");
+    assert_eq!(updated["metadata"]["context"], "test");
+}
+
+#[test]
+fn test_invalid_metadata() {
+    let tmp = TempDir::new().unwrap();
+
+    // Non-JSON string
+    flowstate(&tmp)
+        .args(["task", "add", "Bad meta", "--metadata", "not json"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid metadata JSON"));
+
+    // Valid JSON but not an object
+    flowstate(&tmp)
+        .args(["task", "add", "Bad meta", "--metadata", "[1,2,3]"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("metadata must be a JSON object"));
+}
+
+#[test]
+fn test_attach_detach_list() {
+    let tmp = TempDir::new().unwrap();
+
+    // Create a task
+    let output = flowstate(&tmp)
+        .args(["task", "add", "Task with attachments", "--json"])
+        .output()
+        .unwrap();
+    let task: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let task_id = task["id"].as_str().unwrap().to_string();
+
+    // Create a temp file to attach
+    let file_path = tmp.path().join("test-file.txt");
+    std::fs::write(&file_path, "hello world").unwrap();
+
+    // Attach
+    let output = flowstate(&tmp)
+        .args([
+            "task",
+            "attach",
+            &task_id,
+            file_path.to_str().unwrap(),
+            "--name",
+            "my-doc.txt",
+            "--mime-type",
+            "text/plain",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let attachment: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(attachment["id"].as_str().unwrap().starts_with("at_"));
+    assert_eq!(attachment["task_id"], task_id);
+    assert_eq!(attachment["name"], "my-doc.txt");
+    assert_eq!(attachment["mime_type"], "text/plain");
+    assert_eq!(attachment["size_bytes"], 11); // "hello world".len()
+    let att_id = attachment["id"].as_str().unwrap().to_string();
+
+    // List attachments
+    let output = flowstate(&tmp)
+        .args(["task", "attachments", &task_id, "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let attachments: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(attachments[0]["name"], "my-doc.txt");
+
+    // Detach
+    let output = flowstate(&tmp)
+        .args(["task", "detach", &att_id, "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    // List again — should be empty
+    let output = flowstate(&tmp)
+        .args(["task", "attachments", &task_id, "--json"])
+        .output()
+        .unwrap();
+    let attachments: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(attachments.is_empty());
+}
+
+#[test]
+fn test_attach_defaults_name_to_filename() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = flowstate(&tmp)
+        .args(["task", "add", "File task", "--json"])
+        .output()
+        .unwrap();
+    let task: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let task_id = task["id"].as_str().unwrap().to_string();
+
+    let file_path = tmp.path().join("report.pdf");
+    std::fs::write(&file_path, "fake pdf").unwrap();
+
+    let output = flowstate(&tmp)
+        .args([
+            "task",
+            "attach",
+            &task_id,
+            file_path.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let attachment: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(attachment["name"], "report.pdf");
+}
+
+#[test]
+fn test_detach_nonexistent() {
+    let tmp = TempDir::new().unwrap();
+
+    flowstate(&tmp)
+        .args(["task", "detach", "at_nonexist"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not found"));
+}
+
+#[test]
+fn test_metadata_preserved_on_recurrence() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = flowstate(&tmp)
+        .args([
+            "task",
+            "add",
+            "Daily with meta",
+            "--type",
+            "daily",
+            "--due",
+            "2026-03-03T09:00:00Z",
+            "--metadata",
+            r#"{"source":"agent"}"#,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let task: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let id = task["id"].as_str().unwrap();
+
+    // Complete it
+    flowstate(&tmp)
+        .args(["task", "done", id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Next recurrence created"));
+
+    // New instance should have metadata
+    let output = flowstate(&tmp)
+        .args(["task", "list", "--status", "pending", "--json"])
+        .output()
+        .unwrap();
+    let tasks: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0]["metadata"]["source"], "agent");
+}
+
+#[test]
 fn test_cancel_auto_completes_parent() {
     let tmp = TempDir::new().unwrap();
 

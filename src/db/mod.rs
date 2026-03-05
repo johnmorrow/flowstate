@@ -2,9 +2,10 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use rusqlite::{params, Connection, Row};
 
 use crate::errors::FlowstateError;
-use crate::models::{ScheduleType, Status, Task};
+use crate::models::{generate_attachment_id, Attachment, ScheduleType, Status, Task};
 
 const MIGRATION_001: &str = include_str!("migrations/001_init.sql");
+const MIGRATION_002: &str = include_str!("migrations/002_metadata_and_attachments.sql");
 
 pub struct Database {
     conn: Connection,
@@ -25,6 +26,7 @@ pub struct TaskUpdates {
     pub due_at: Option<Option<DateTime<Utc>>>,
     pub tags: Option<Vec<String>>,
     pub recur_rule: Option<Option<String>>,
+    pub metadata: Option<serde_json::Value>,
 }
 
 pub fn parse_datetime(s: &str) -> Result<DateTime<Utc>, FlowstateError> {
@@ -61,26 +63,35 @@ impl Database {
                 |row| row.get(0),
             )?;
 
-        if !has_table {
+        let max_version: i64 = if !has_table {
             self.conn.execute_batch(MIGRATION_001)?;
             self.conn.execute(
                 "INSERT INTO schema_migrations (version) VALUES (?1)",
                 params![1],
             )?;
-            return Ok(());
-        }
+            1
+        } else {
+            let v: i64 = self.conn.query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+                [],
+                |row| row.get(0),
+            )?;
 
-        let max_version: i64 = self.conn.query_row(
-            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
-            [],
-            |row| row.get(0),
-        )?;
+            if v < 1 {
+                self.conn.execute_batch(MIGRATION_001)?;
+                self.conn.execute(
+                    "INSERT INTO schema_migrations (version) VALUES (?1)",
+                    params![1],
+                )?;
+            }
+            v
+        };
 
-        if max_version < 1 {
-            self.conn.execute_batch(MIGRATION_001)?;
+        if max_version < 2 {
+            self.conn.execute_batch(MIGRATION_002)?;
             self.conn.execute(
                 "INSERT INTO schema_migrations (version) VALUES (?1)",
-                params![1],
+                params![2],
             )?;
         }
 
@@ -104,10 +115,12 @@ impl Database {
 
         let tags_json = serde_json::to_string(&task.tags)
             .map_err(|e| FlowstateError::Validation(e.to_string()))?;
+        let metadata_json = serde_json::to_string(&task.metadata)
+            .map_err(|e| FlowstateError::Validation(e.to_string()))?;
 
         self.conn.execute(
-            "INSERT INTO tasks (id, title, status, schedule_type, due_at, recur_rule, parent_id, tags, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO tasks (id, title, status, schedule_type, due_at, recur_rule, parent_id, tags, metadata, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 task.id,
                 task.title,
@@ -117,6 +130,7 @@ impl Database {
                 task.recur_rule,
                 task.parent_id,
                 tags_json,
+                metadata_json,
                 task.created_at.to_rfc3339(),
                 task.updated_at.to_rfc3339(),
             ],
@@ -216,6 +230,12 @@ impl Database {
             sets.push(format!("recur_rule = ?{}", param_values.len() + 1));
             param_values.push(Box::new(recur_rule.clone()));
         }
+        if let Some(ref metadata) = updates.metadata {
+            let metadata_json = serde_json::to_string(metadata)
+                .map_err(|e| FlowstateError::Validation(e.to_string()))?;
+            sets.push(format!("metadata = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(metadata_json));
+        }
 
         if sets.is_empty() {
             return self.get_task(id);
@@ -281,6 +301,7 @@ impl Database {
                     due_at: None,
                     tags: None,
                     recur_rule: None,
+                    metadata: None,
                 },
             )?;
             Ok(Some(updated))
@@ -344,6 +365,85 @@ impl Database {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(tasks)
     }
+
+    pub fn add_attachment(
+        &self,
+        task_id: &str,
+        name: &str,
+        path: &str,
+        mime_type: Option<&str>,
+        size_bytes: Option<i64>,
+    ) -> Result<Attachment, FlowstateError> {
+        // Verify task exists
+        let _task = self.get_task(task_id)?;
+
+        let now = Utc::now();
+        let attachment = Attachment {
+            id: generate_attachment_id(),
+            task_id: task_id.to_string(),
+            name: name.to_string(),
+            path: path.to_string(),
+            mime_type: mime_type.map(|s| s.to_string()),
+            size_bytes,
+            created_at: now,
+        };
+
+        self.conn.execute(
+            "INSERT INTO attachments (id, task_id, name, path, mime_type, size_bytes, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                attachment.id,
+                attachment.task_id,
+                attachment.name,
+                attachment.path,
+                attachment.mime_type,
+                attachment.size_bytes,
+                attachment.created_at.to_rfc3339(),
+            ],
+        )?;
+
+        Ok(attachment)
+    }
+
+    pub fn remove_attachment(&self, attachment_id: &str) -> Result<(), FlowstateError> {
+        let rows = self.conn.execute(
+            "DELETE FROM attachments WHERE id = ?1",
+            params![attachment_id],
+        )?;
+        if rows == 0 {
+            return Err(FlowstateError::NotFound(format!(
+                "attachment {attachment_id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn list_attachments(&self, task_id: &str) -> Result<Vec<Attachment>, FlowstateError> {
+        // Verify task exists
+        let _task = self.get_task(task_id)?;
+
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM attachments WHERE task_id = ?1 ORDER BY created_at ASC")?;
+        let attachments = stmt
+            .query_map(params![task_id], |row| {
+                let created_str: String = row.get("created_at")?;
+                let created_at = DateTime::parse_from_rfc3339(&created_str)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now());
+                Ok(Attachment {
+                    id: row.get("id")?,
+                    task_id: row.get("task_id")?,
+                    name: row.get("name")?,
+                    path: row.get("path")?,
+                    mime_type: row.get("mime_type")?,
+                    size_bytes: row.get("size_bytes")?,
+                    created_at,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(attachments)
+    }
 }
 
 fn row_to_task(row: &Row) -> Result<Task, rusqlite::Error> {
@@ -366,6 +466,9 @@ fn row_to_task(row: &Row) -> Result<Task, rusqlite::Error> {
             .map(|d| d.with_timezone(&Utc))
     });
     let tags: Vec<String> = serde_json::from_str(&tags_str).unwrap_or_default();
+    let metadata_str: String = row.get("metadata").unwrap_or_else(|_| "{}".to_string());
+    let metadata: serde_json::Value =
+        serde_json::from_str(&metadata_str).unwrap_or(serde_json::json!({}));
     let created_at = DateTime::parse_from_rfc3339(&created_str)
         .map(|d| d.with_timezone(&Utc))
         .unwrap_or_else(|_| Utc::now());
@@ -382,6 +485,7 @@ fn row_to_task(row: &Row) -> Result<Task, rusqlite::Error> {
         recur_rule: row.get("recur_rule")?,
         parent_id: row.get("parent_id")?,
         tags,
+        metadata,
         created_at,
         updated_at,
     })

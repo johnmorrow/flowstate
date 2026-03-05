@@ -6,6 +6,16 @@ use crate::models::{generate_task_id, ScheduleType, Status, Task};
 use crate::output;
 use crate::recur;
 use chrono::Utc;
+use std::path::Path;
+
+struct UpdateParams {
+    title: Option<String>,
+    status: Option<String>,
+    due: Option<String>,
+    tags: Vec<String>,
+    metadata: Option<String>,
+    json: bool,
+}
 
 struct AddParams {
     title: String,
@@ -14,6 +24,7 @@ struct AddParams {
     recur: Option<String>,
     parent: Option<String>,
     tags: Vec<String>,
+    metadata: Option<String>,
     json: bool,
 }
 
@@ -38,6 +49,9 @@ pub enum TaskAction {
         /// Tags (repeatable)
         #[arg(long, action = clap::ArgAction::Append)]
         tag: Vec<String>,
+        /// Metadata as JSON object
+        #[arg(long)]
+        metadata: Option<String>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -84,6 +98,9 @@ pub enum TaskAction {
         /// Set tags (replaces existing)
         #[arg(long, action = clap::ArgAction::Append)]
         tag: Vec<String>,
+        /// Metadata as JSON object
+        #[arg(long)]
+        metadata: Option<String>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -115,6 +132,38 @@ pub enum TaskAction {
         #[arg(long)]
         json: bool,
     },
+    /// Attach a file to a task
+    Attach {
+        /// Task ID
+        task_id: String,
+        /// File path
+        path: String,
+        /// Attachment name (defaults to filename)
+        #[arg(long)]
+        name: Option<String>,
+        /// MIME type
+        #[arg(long)]
+        mime_type: Option<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove an attachment
+    Detach {
+        /// Attachment ID
+        attachment_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// List attachments for a task
+    Attachments {
+        /// Task ID
+        task_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub fn handle(action: TaskAction, db: &Database) -> Result<(), FlowstateError> {
@@ -126,6 +175,7 @@ pub fn handle(action: TaskAction, db: &Database) -> Result<(), FlowstateError> {
             recur,
             parent,
             tag,
+            metadata,
             json,
         } => cmd_add(
             db,
@@ -136,6 +186,7 @@ pub fn handle(action: TaskAction, db: &Database) -> Result<(), FlowstateError> {
                 recur,
                 parent,
                 tags: tag,
+                metadata,
                 json,
             },
         ),
@@ -153,8 +204,20 @@ pub fn handle(action: TaskAction, db: &Database) -> Result<(), FlowstateError> {
             status,
             due,
             tag,
+            metadata,
             json,
-        } => cmd_update(db, &id, title, status, due, tag, json),
+        } => cmd_update(
+            db,
+            &id,
+            UpdateParams {
+                title,
+                status,
+                due,
+                tags: tag,
+                metadata,
+                json,
+            },
+        ),
         TaskAction::Done {
             id,
             no_auto_complete,
@@ -162,6 +225,18 @@ pub fn handle(action: TaskAction, db: &Database) -> Result<(), FlowstateError> {
         } => cmd_done(db, &id, no_auto_complete, json),
         TaskAction::Cancel { id, json } => cmd_cancel(db, &id, json),
         TaskAction::Breakdown { id, json } => cmd_breakdown(db, &id, json),
+        TaskAction::Attach {
+            task_id,
+            path,
+            name,
+            mime_type,
+            json,
+        } => cmd_attach(db, &task_id, &path, name, mime_type, json),
+        TaskAction::Detach {
+            attachment_id,
+            json,
+        } => cmd_detach(db, &attachment_id, json),
+        TaskAction::Attachments { task_id, json } => cmd_attachments(db, &task_id, json),
     }
 }
 
@@ -173,6 +248,7 @@ fn cmd_add(db: &Database, params: AddParams) -> Result<(), FlowstateError> {
         recur,
         parent,
         tags,
+        metadata,
         json,
     } = params;
     let stype = match schedule_type {
@@ -190,6 +266,8 @@ fn cmd_add(db: &Database, params: AddParams) -> Result<(), FlowstateError> {
         ));
     }
 
+    let parsed_metadata = parse_metadata_arg(metadata)?;
+
     let now = Utc::now();
     let task = Task {
         id: generate_task_id(),
@@ -200,6 +278,7 @@ fn cmd_add(db: &Database, params: AddParams) -> Result<(), FlowstateError> {
         recur_rule: recur,
         parent_id: parent,
         tags,
+        metadata: parsed_metadata,
         created_at: now,
         updated_at: now,
     };
@@ -242,15 +321,16 @@ fn cmd_list(
     Ok(())
 }
 
-fn cmd_update(
-    db: &Database,
-    id: &str,
-    title: Option<String>,
-    status: Option<String>,
-    due: Option<String>,
-    tags: Vec<String>,
-    json: bool,
-) -> Result<(), FlowstateError> {
+fn cmd_update(db: &Database, id: &str, params: UpdateParams) -> Result<(), FlowstateError> {
+    let UpdateParams {
+        title,
+        status,
+        due,
+        tags,
+        metadata,
+        json,
+    } = params;
+
     let parsed_status = status
         .map(|s| s.parse::<Status>().map_err(FlowstateError::Validation))
         .transpose()?;
@@ -263,12 +343,19 @@ fn cmd_update(
 
     let parsed_tags = if tags.is_empty() { None } else { Some(tags) };
 
+    let parsed_metadata = if metadata.is_some() {
+        Some(parse_metadata_arg(metadata)?)
+    } else {
+        None
+    };
+
     let updates = TaskUpdates {
         title,
         status: parsed_status,
         due_at: parsed_due,
         tags: parsed_tags,
         recur_rule: None,
+        metadata: parsed_metadata,
     };
 
     let task = db.update_task(id, &updates)?;
@@ -298,6 +385,7 @@ fn cmd_done(
             due_at: None,
             tags: None,
             recur_rule: None,
+            metadata: None,
         },
     )?;
 
@@ -337,6 +425,7 @@ fn cmd_cancel(db: &Database, id: &str, json: bool) -> Result<(), FlowstateError>
             due_at: None,
             tags: None,
             recur_rule: None,
+            metadata: None,
         },
     )?;
 
@@ -357,5 +446,62 @@ fn cmd_breakdown(db: &Database, id: &str, json: bool) -> Result<(), FlowstateErr
     let _parent = db.get_task(id)?;
     let children = db.get_children(id)?;
     output::print_tasks(&children, json);
+    Ok(())
+}
+
+fn parse_metadata_arg(metadata: Option<String>) -> Result<serde_json::Value, FlowstateError> {
+    match metadata {
+        Some(s) => {
+            let val: serde_json::Value = serde_json::from_str(&s)
+                .map_err(|e| FlowstateError::Validation(format!("invalid metadata JSON: {e}")))?;
+            if !val.is_object() {
+                return Err(FlowstateError::Validation(
+                    "metadata must be a JSON object".to_string(),
+                ));
+            }
+            Ok(val)
+        }
+        None => Ok(serde_json::json!({})),
+    }
+}
+
+fn cmd_attach(
+    db: &Database,
+    task_id: &str,
+    path: &str,
+    name: Option<String>,
+    mime_type: Option<String>,
+    json: bool,
+) -> Result<(), FlowstateError> {
+    let file_path = Path::new(path);
+    let attachment_name = name.unwrap_or_else(|| {
+        file_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string())
+    });
+
+    let size_bytes = std::fs::metadata(file_path).ok().map(|m| m.len() as i64);
+
+    let attachment = db.add_attachment(
+        task_id,
+        &attachment_name,
+        path,
+        mime_type.as_deref(),
+        size_bytes,
+    )?;
+    output::print_attachment(&attachment, json);
+    Ok(())
+}
+
+fn cmd_detach(db: &Database, attachment_id: &str, json: bool) -> Result<(), FlowstateError> {
+    db.remove_attachment(attachment_id)?;
+    output::print_message(&format!("Attachment {attachment_id} removed"), json);
+    Ok(())
+}
+
+fn cmd_attachments(db: &Database, task_id: &str, json: bool) -> Result<(), FlowstateError> {
+    let attachments = db.list_attachments(task_id)?;
+    output::print_attachments(&attachments, json);
     Ok(())
 }

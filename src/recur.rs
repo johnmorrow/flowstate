@@ -45,6 +45,7 @@ pub fn generate_next_instance(
         recur_rule: completed_task.recur_rule.clone(),
         parent_id: completed_task.parent_id.clone(),
         tags: completed_task.tags.clone(),
+        metadata: completed_task.metadata.clone(),
         created_at: now,
         updated_at: now,
     };
