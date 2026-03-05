@@ -47,12 +47,14 @@ Create a new task.
 | `--recur <RULE>` | Recurrence rule (see [Recurring Tasks](#recurring-tasks)) |
 | `--parent <ID>` | Parent task ID for hierarchical breakdowns |
 | `--tag <TAG>` | Tag (repeatable, e.g. `--tag "project:x" --tag "agent:claude"`) |
+| `--metadata <JSON>` | Arbitrary JSON object (e.g. `'{"key":"value"}'`) |
 | `--json` | Output as JSON |
 
 ```bash
 flowstate task add "Deploy staging" --type deadline --due 2026-03-15 --tag "team:infra"
 flowstate task add "Daily standup" --type daily --due 2026-03-03T09:00:00Z
 flowstate task add "Write tests" --parent tk_a3f9xz12
+flowstate task add "Investigate bug" --metadata '{"source":"sentry","issue_id":1234}'
 ```
 
 ### `flowstate task get <id>`
@@ -91,11 +93,13 @@ Update an existing task. Tags are replaced (not appended) — always specify the
 | `--status <STATUS>` | New status |
 | `--due <DATETIME>` | New due date |
 | `--tag <TAG>` | Replace tags (repeatable) |
+| `--metadata <JSON>` | Replace metadata with new JSON object |
 | `--json` | Output as JSON |
 
 ```bash
 flowstate task update tk_a3f9xz12 --status in_progress
 flowstate task update tk_a3f9xz12 --title "Updated title" --tag "v2" --tag "urgent"
+flowstate task update tk_a3f9xz12 --metadata '{"reviewed":true}'
 ```
 
 ### `flowstate task done <id>`
@@ -117,6 +121,37 @@ List all subtasks (children) of a parent task.
 
 ```bash
 flowstate task breakdown tk_a3f9xz12 --json
+```
+
+### `flowstate task attach <id> <path>`
+
+Attach a file to a task. The file name is derived from the path unless `--name` is provided.
+
+| Flag | Description |
+|------|-------------|
+| `--name <NAME>` | Override attachment display name |
+| `--mime-type <TYPE>` | MIME type (e.g. `text/plain`, `application/pdf`) |
+| `--json` | Output as JSON |
+
+```bash
+flowstate task attach tk_a3f9xz12 ./logs/deploy.log --mime-type text/plain --json
+flowstate task attach tk_a3f9xz12 ./screenshot.png --name "error-screenshot.png"
+```
+
+### `flowstate task detach <attachment_id>`
+
+Remove an attachment by its ID (e.g. `at_b4g8yz34`).
+
+```bash
+flowstate task detach at_b4g8yz34 --json
+```
+
+### `flowstate task attachments <id>`
+
+List all attachments for a task.
+
+```bash
+flowstate task attachments tk_a3f9xz12 --json
 ```
 
 ### `flowstate agenda`
@@ -141,9 +176,11 @@ Show all tasks past their due date that haven't been completed or cancelled.
 flowstate overdue --json
 ```
 
-## Task IDs
+## IDs
 
-IDs are stable 11-character strings: `tk_` prefix + 8 lowercase alphanumeric characters (e.g. `tk_a3f9xz12`).
+Task IDs are stable 11-character strings: `tk_` prefix + 8 lowercase alphanumeric characters (e.g. `tk_a3f9xz12`).
+
+Attachment IDs use the same format with an `at_` prefix (e.g. `at_b4g8yz34`).
 
 ## Recurring Tasks
 
@@ -209,10 +246,13 @@ flowstate task get tk_a3f9xz12 --json
   "schedule_type": "deadline",
   "due_at": "2026-03-10T17:00:00Z",
   "tags": ["project:flowstate"],
+  "metadata": {"agent": "claude", "priority": "high"},
   "created_at": "2026-03-03T09:00:00Z",
   "updated_at": "2026-03-03T09:00:00Z"
 }
 ```
+
+The `metadata` field is omitted from output when it is an empty object. Optional fields (`due_at`, `recur_rule`, `parent_id`) are omitted when null.
 
 ```bash
 # Task list
@@ -247,5 +287,9 @@ FLOWSTATE_DB=/tmp/test.db flowstate task list
 ```bash
 cargo fmt                        # Format
 cargo clippy -- -D warnings      # Lint
-cargo test                       # Run tests (23 integration tests)
+cargo test                       # Run tests (30 integration tests)
 ```
+
+## License
+
+Apache 2.0 — see [LICENSE](LICENSE).

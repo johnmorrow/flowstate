@@ -37,7 +37,20 @@ The fundamental unit. Every task has:
 - `recur_rule` — optional cron-style or simple string (`"daily"`, `"weekly:mon"`, etc.)
 - `parent_id` — optional, links to a parent task (for breakdowns)
 - `tags` — array of strings (e.g. `["agent:claude", "project:flowstate"]`)
+- `metadata` — optional JSON object for arbitrary structured data (e.g. `{"agent":"claude","context":"deploy"}`)
 - `created_at`, `updated_at` — ISO 8601
+
+### Attachment
+A file or document linked to a task. Every attachment has:
+- `id` — stable short ID (e.g. `at_b4g8yz34`)
+- `task_id` — references a task
+- `name` — display name
+- `path` — file path
+- `mime_type` — optional MIME type
+- `size_bytes` — optional file size
+- `created_at` — ISO 8601
+
+Attachments are cascade-deleted when their parent task is removed.
 
 ### Breakdown
 A parent task with child subtasks. Agents decompose large tasks into breakdowns. Completing all children auto-transitions the parent to `done` unless `--no-auto-complete` is set.
@@ -52,15 +65,18 @@ A parent task with child subtasks. Agents decompose large tasks into breakdowns.
 ## Commands
 
 ```
-flowstate task add <title> [--type <schedule_type>] [--due <datetime>] [--recur <rule>] [--parent <id>] [--tag <tag>]
+flowstate task add <title> [--type <schedule_type>] [--due <datetime>] [--recur <rule>] [--parent <id>] [--tag <tag>] [--metadata <json>]
 flowstate task get <id> [--json]
 flowstate task list [--status <status>] [--type <schedule_type>] [--tag <tag>] [--due-before <datetime>] [--json]
-flowstate task update <id> [--title <title>] [--status <status>] [--due <datetime>] [--tag <tag>]
+flowstate task update <id> [--title <title>] [--status <status>] [--due <datetime>] [--tag <tag>] [--metadata <json>]
 flowstate task done <id>
 flowstate task cancel <id>
-flowstate task breakdown <id>          # List subtasks of a parent task
+flowstate task breakdown <id>              # List subtasks of a parent task
+flowstate task attach <id> <path> [--name <name>] [--mime-type <type>] [--json]
+flowstate task detach <attachment_id> [--json]
+flowstate task attachments <id> [--json]   # List attachments for a task
 flowstate agenda [--date <date>] [--json]  # Today's pending/due tasks
-flowstate overdue [--json]             # Tasks past their due_at
+flowstate overdue [--json]                 # Tasks past their due_at
 ```
 
 ## Output Format
@@ -75,11 +91,13 @@ Default (human) output is minimal plaintext. With `--json`, always return a vali
   "schedule_type": "deadline",
   "due_at": "2025-03-10T17:00:00Z",
   "tags": ["project:flowstate"],
-  "parent_id": null,
+  "metadata": {"agent": "claude", "priority": "high"},
   "created_at": "2025-03-03T09:00:00Z",
   "updated_at": "2025-03-03T09:00:00Z"
 }
 ```
+
+Note: `metadata` is omitted from JSON output when it is an empty object `{}`.
 
 ## Project Structure
 
