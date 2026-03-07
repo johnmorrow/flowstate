@@ -866,3 +866,377 @@ fn test_cancel_auto_completes_parent() {
     let p: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(p["status"], "done");
 }
+
+// ── State export/import tests ──────────────────────────────────────
+
+#[test]
+fn test_export_creates_files() {
+    let tmp = TempDir::new().unwrap();
+    let export_dir = tmp.path().join("export");
+
+    // Add two tasks
+    flowstate(&tmp)
+        .args(["task", "add", "Task A", "--tag", "alpha", "--json"])
+        .assert()
+        .success();
+    flowstate(&tmp)
+        .args(["task", "add", "Task B", "--tag", "beta", "--json"])
+        .assert()
+        .success();
+
+    // Export
+    flowstate(&tmp)
+        .args(["state", "export", "--dir", export_dir.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Exported 2 tasks"));
+
+    // Verify files exist
+    let entries: Vec<_> = std::fs::read_dir(&export_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(entries.len(), 2);
+
+    // Verify file contents are valid JSON tasks
+    for entry in &entries {
+        let content = std::fs::read_to_string(entry.path()).unwrap();
+        let task: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert!(task["id"].as_str().unwrap().starts_with("tk_"));
+        assert!(task["title"].is_string());
+    }
+}
+
+#[test]
+fn test_export_excludes_metadata_by_default() {
+    let tmp = TempDir::new().unwrap();
+    let export_dir = tmp.path().join("export");
+
+    let output = flowstate(&tmp)
+        .args([
+            "task",
+            "add",
+            "Secret task",
+            "--metadata",
+            r#"{"api_key":"sk-12345","context":"test"}"#,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let task: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let id = task["id"].as_str().unwrap();
+
+    // Export without --include-metadata
+    flowstate(&tmp)
+        .args(["state", "export", "--dir", export_dir.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let file_content = std::fs::read_to_string(export_dir.join(format!("{id}.json"))).unwrap();
+    let exported: serde_json::Value = serde_json::from_str(&file_content).unwrap();
+    assert!(exported.get("metadata").is_none());
+}
+
+#[test]
+fn test_export_includes_metadata_when_flagged() {
+    let tmp = TempDir::new().unwrap();
+    let export_dir = tmp.path().join("export");
+
+    let output = flowstate(&tmp)
+        .args([
+            "task",
+            "add",
+            "Meta task",
+            "--metadata",
+            r#"{"key":"value"}"#,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let task: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let id = task["id"].as_str().unwrap();
+
+    // Export with --include-metadata
+    flowstate(&tmp)
+        .args([
+            "state",
+            "export",
+            "--dir",
+            export_dir.to_str().unwrap(),
+            "--include-metadata",
+        ])
+        .assert()
+        .success();
+
+    let file_content = std::fs::read_to_string(export_dir.join(format!("{id}.json"))).unwrap();
+    let exported: serde_json::Value = serde_json::from_str(&file_content).unwrap();
+    assert_eq!(exported["metadata"]["key"], "value");
+}
+
+#[test]
+fn test_export_with_status_filter() {
+    let tmp = TempDir::new().unwrap();
+    let export_dir = tmp.path().join("export");
+
+    let out = flowstate(&tmp)
+        .args(["task", "add", "Done task", "--json"])
+        .output()
+        .unwrap();
+    let task: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let id = task["id"].as_str().unwrap();
+
+    flowstate(&tmp)
+        .args(["task", "done", id])
+        .assert()
+        .success();
+
+    flowstate(&tmp)
+        .args(["task", "add", "Pending task"])
+        .assert()
+        .success();
+
+    // Export only pending
+    flowstate(&tmp)
+        .args([
+            "state",
+            "export",
+            "--dir",
+            export_dir.to_str().unwrap(),
+            "--status",
+            "pending",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Exported 1 tasks"));
+}
+
+#[test]
+fn test_import_creates_new_tasks() {
+    let tmp = TempDir::new().unwrap();
+    let export_dir = tmp.path().join("export");
+
+    // Add and export tasks from one DB
+    flowstate(&tmp)
+        .args(["task", "add", "Importable", "--json"])
+        .assert()
+        .success();
+    flowstate(&tmp)
+        .args([
+            "state",
+            "export",
+            "--dir",
+            export_dir.to_str().unwrap(),
+            "--include-metadata",
+        ])
+        .assert()
+        .success();
+
+    // Use a fresh DB and import
+    let tmp2 = TempDir::new().unwrap();
+    flowstate(&tmp2)
+        .args(["state", "import", "--dir", export_dir.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 created"));
+
+    // Verify the task exists in the new DB
+    let out = flowstate(&tmp2)
+        .args(["task", "list", "--json"])
+        .output()
+        .unwrap();
+    let tasks: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0]["title"], "Importable");
+}
+
+#[test]
+fn test_import_skip_strategy() {
+    let tmp = TempDir::new().unwrap();
+    let export_dir = tmp.path().join("export");
+
+    // Add a task, export, then update title
+    let out = flowstate(&tmp)
+        .args(["task", "add", "Original", "--json"])
+        .output()
+        .unwrap();
+    let task: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let id = task["id"].as_str().unwrap();
+
+    flowstate(&tmp)
+        .args([
+            "state",
+            "export",
+            "--dir",
+            export_dir.to_str().unwrap(),
+            "--include-metadata",
+        ])
+        .assert()
+        .success();
+
+    flowstate(&tmp)
+        .args(["task", "update", id, "--title", "Updated"])
+        .assert()
+        .success();
+
+    // Import with skip strategy — should not overwrite
+    flowstate(&tmp)
+        .args([
+            "state",
+            "import",
+            "--dir",
+            export_dir.to_str().unwrap(),
+            "--strategy",
+            "skip",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 skipped"));
+
+    // Verify title is still "Updated"
+    let out = flowstate(&tmp)
+        .args(["task", "get", id, "--json"])
+        .output()
+        .unwrap();
+    let fetched: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(fetched["title"], "Updated");
+}
+
+#[test]
+fn test_import_overwrite_strategy() {
+    let tmp = TempDir::new().unwrap();
+    let export_dir = tmp.path().join("export");
+
+    // Add a task and export
+    let out = flowstate(&tmp)
+        .args(["task", "add", "Original", "--json"])
+        .output()
+        .unwrap();
+    let task: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let id = task["id"].as_str().unwrap();
+
+    flowstate(&tmp)
+        .args([
+            "state",
+            "export",
+            "--dir",
+            export_dir.to_str().unwrap(),
+            "--include-metadata",
+        ])
+        .assert()
+        .success();
+
+    // Update the task title in DB
+    flowstate(&tmp)
+        .args(["task", "update", id, "--title", "Changed in DB"])
+        .assert()
+        .success();
+
+    // Import with overwrite — should revert to exported version
+    flowstate(&tmp)
+        .args([
+            "state",
+            "import",
+            "--dir",
+            export_dir.to_str().unwrap(),
+            "--strategy",
+            "overwrite",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 updated"));
+
+    let out = flowstate(&tmp)
+        .args(["task", "get", id, "--json"])
+        .output()
+        .unwrap();
+    let fetched: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(fetched["title"], "Original");
+}
+
+#[test]
+fn test_import_nonexistent_dir() {
+    let tmp = TempDir::new().unwrap();
+
+    flowstate(&tmp)
+        .args(["state", "import", "--dir", "/nonexistent/path"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not found"));
+}
+
+#[test]
+fn test_export_removes_stale_files() {
+    let tmp = TempDir::new().unwrap();
+    let export_dir = tmp.path().join("export");
+
+    // Add two tasks and export
+    let out1 = flowstate(&tmp)
+        .args(["task", "add", "Task A", "--json"])
+        .output()
+        .unwrap();
+    let task_a: serde_json::Value = serde_json::from_slice(&out1.stdout).unwrap();
+    let id_a = task_a["id"].as_str().unwrap().to_string();
+
+    flowstate(&tmp)
+        .args(["task", "add", "Task B", "--json"])
+        .assert()
+        .success();
+
+    flowstate(&tmp)
+        .args(["state", "export", "--dir", export_dir.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Exported 2 tasks"));
+
+    // Cancel task A, then export only pending — stale file should be removed
+    flowstate(&tmp)
+        .args(["task", "cancel", &id_a])
+        .assert()
+        .success();
+
+    flowstate(&tmp)
+        .args([
+            "state",
+            "export",
+            "--dir",
+            export_dir.to_str().unwrap(),
+            "--status",
+            "pending",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removed 1 stale"));
+
+    // Only one file should remain
+    let entries: Vec<_> = std::fs::read_dir(&export_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(entries.len(), 1);
+}
+
+#[test]
+fn test_export_json_output() {
+    let tmp = TempDir::new().unwrap();
+    let export_dir = tmp.path().join("export");
+
+    flowstate(&tmp)
+        .args(["task", "add", "Test"])
+        .assert()
+        .success();
+
+    let output = flowstate(&tmp)
+        .args([
+            "state",
+            "export",
+            "--dir",
+            export_dir.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let msg: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(msg["message"].as_str().unwrap().contains("Exported"));
+}

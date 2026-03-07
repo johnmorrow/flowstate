@@ -11,6 +11,9 @@ pub enum FlowstateError {
     #[error("conflict: {0}")]
     Conflict(String),
 
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
     #[error("{0}")]
     Database(#[from] rusqlite::Error),
 
@@ -24,7 +27,7 @@ impl FlowstateError {
             FlowstateError::NotFound(_) => 1,
             FlowstateError::Validation(_) => 2,
             FlowstateError::Conflict(_) => 3,
-            FlowstateError::Database(_) | FlowstateError::Other(_) => 1,
+            FlowstateError::Io(_) | FlowstateError::Database(_) | FlowstateError::Other(_) => 1,
         }
     }
 }

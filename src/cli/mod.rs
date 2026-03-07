@@ -1,4 +1,5 @@
 pub mod agenda;
+pub mod state;
 pub mod task;
 
 use clap::{Parser, Subcommand};
@@ -16,6 +17,11 @@ pub enum Commands {
     Task {
         #[command(subcommand)]
         action: task::TaskAction,
+    },
+    /// Export or import task state for version control
+    State {
+        #[command(subcommand)]
+        action: state::StateAction,
     },
     /// Show today's agenda
     Agenda {

@@ -101,11 +101,16 @@ pub struct Task {
     pub recur_rule: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
+    #[serde(default)]
     pub tags: Vec<String>,
-    #[serde(skip_serializing_if = "is_empty_object")]
+    #[serde(default = "default_metadata", skip_serializing_if = "is_empty_object")]
     pub metadata: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+fn default_metadata() -> serde_json::Value {
+    serde_json::json!({})
 }
 
 fn is_empty_object(v: &serde_json::Value) -> bool {

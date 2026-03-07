@@ -25,6 +25,7 @@ fn run() -> Result<(), FlowstateError> {
 
     match cli.command {
         Commands::Task { action } => cli::task::handle(action, &db),
+        Commands::State { action } => cli::state::handle(action, &db),
         Commands::Agenda { date, json } => cli::agenda::handle_agenda(&db, date, json),
         Commands::Overdue { json } => cli::agenda::handle_overdue(&db, json),
     }
