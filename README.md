@@ -160,6 +160,58 @@ List all attachments for a task.
 flowstate task attachments tk_a3f9xz12 --json
 ```
 
+### `flowstate state export`
+
+Export tasks to per-file JSON in a directory suitable for version control. Metadata is excluded by default to prevent accidental secret leakage.
+
+| Flag | Description |
+|------|-------------|
+| `--dir <PATH>` | Output directory (default: `.flowstate/tasks`) |
+| `--include-metadata` | Include metadata in exported files |
+| `--status <STATUS>` | Only export tasks with this status |
+| `--tag <TAG>` | Only export tasks with this tag |
+| `--json` | Output as JSON |
+
+```bash
+# Export all tasks (metadata excluded)
+flowstate state export
+
+# Export to a custom directory, including metadata
+flowstate state export --dir ./my-tasks --include-metadata
+
+# Export only pending tasks
+flowstate state export --status pending
+```
+
+Stale files (for tasks no longer matching the export) are automatically removed.
+
+### `flowstate state import`
+
+Import tasks from previously exported files. Supports three merge strategies for handling tasks that already exist in the database.
+
+| Flag | Description |
+|------|-------------|
+| `--dir <PATH>` | Input directory (default: `.flowstate/tasks`) |
+| `--strategy <STRATEGY>` | Merge strategy: `skip` (default), `overwrite`, `update-newer` |
+| `--json` | Output as JSON |
+
+| Strategy | Behavior |
+|----------|----------|
+| `skip` | Don't touch existing tasks (only create new ones) |
+| `overwrite` | Always replace with the file version |
+| `update-newer` | Only replace if the file's `updated_at` is more recent |
+
+```bash
+# Import from default directory (skip existing)
+flowstate state import
+
+# Import with overwrite strategy
+flowstate state import --strategy overwrite
+
+# Import from a custom directory
+flowstate state import --dir ./my-tasks --strategy update-newer
+```
+
 ### `flowstate agenda`
 
 Show tasks relevant for today: due today, daily tasks, matching weekly tasks, overdue deadlines, and in-progress tasks.
@@ -293,7 +345,7 @@ FLOWSTATE_DB=/tmp/test.db flowstate task list
 ```bash
 cargo fmt                        # Format
 cargo clippy -- -D warnings      # Lint
-cargo test                       # Run tests (30 integration tests)
+cargo test                       # Run tests (40+ integration tests)
 ```
 
 ## License

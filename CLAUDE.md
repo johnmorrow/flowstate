@@ -75,6 +75,8 @@ flowstate task breakdown <id>              # List subtasks of a parent task
 flowstate task attach <id> <path> [--name <name>] [--mime-type <type>] [--json]
 flowstate task detach <attachment_id> [--json]
 flowstate task attachments <id> [--json]   # List attachments for a task
+flowstate state export [--dir <path>] [--include-metadata] [--status <status>] [--tag <tag>] [--json]
+flowstate state import [--dir <path>] [--strategy <overwrite|skip|update-newer>] [--json]
 flowstate agenda [--date <date>] [--json]  # Today's pending/due tasks
 flowstate overdue [--json]                 # Tasks past their due_at
 ```
@@ -107,7 +109,8 @@ flowstate/
 │   ├── main.rs          # Entry point, CLI setup via clap
 │   ├── cli/             # Command definitions (one file per command group)
 │   │   ├── task.rs
-│   │   └── agenda.rs
+│   │   ├── agenda.rs
+│   │   └── state.rs
 │   ├── db/              # SQLite layer (migrations, queries)
 │   │   ├── mod.rs
 │   │   └── migrations/
@@ -138,3 +141,5 @@ When Claude Code is working on this project:
 - `flowstate agenda` is the primary entrypoint for an agent starting a session — think of it as the agent's "what should I do now" command
 - Tag convention for agent-created tasks: `agent:<agent-name>` (e.g. `agent:claude`)
 - Tasks tagged `meta` are housekeeping tasks about Flowstate itself — don't auto-complete or modify these unless explicitly instructed
+- Use `flowstate state export` to serialize task state to `.flowstate/tasks/` for version control; metadata is excluded by default to prevent secret leakage
+- Use `flowstate state import` to restore task state from exported files; the `--strategy` flag controls how conflicts are resolved (`skip`, `overwrite`, or `update-newer`)

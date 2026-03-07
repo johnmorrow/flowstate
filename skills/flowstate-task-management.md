@@ -172,6 +172,57 @@ flowstate task attachments tk_a3f9xz12 --json
 flowstate task detach at_b4g8yz34 --json
 ```
 
+## State Serialization (Version Control)
+
+Export and import task state as per-task JSON files, suitable for checking into git.
+
+### Export tasks
+
+```bash
+# Export all tasks (metadata excluded by default for security)
+flowstate state export --json
+
+# Export with metadata included
+flowstate state export --include-metadata --json
+
+# Export only pending tasks to a custom directory
+flowstate state export --dir ./tasks --status pending --json
+```
+
+Metadata is excluded by default to prevent accidental secret leakage (API keys, tokens stored in metadata). Use `--include-metadata` to opt in.
+
+### Import tasks
+
+```bash
+# Import from default directory (skip existing tasks)
+flowstate state import --json
+
+# Import and overwrite existing tasks with file versions
+flowstate state import --strategy overwrite --json
+
+# Import, only updating tasks where the file is newer
+flowstate state import --strategy update-newer --json
+```
+
+| Strategy | Behavior |
+|----------|----------|
+| `skip` | Only create new tasks, leave existing ones alone (default) |
+| `overwrite` | Always replace existing tasks with file version |
+| `update-newer` | Replace only if the file's `updated_at` is more recent |
+
+### Version control workflow
+
+```bash
+# Export tasks alongside your code
+flowstate state export
+git add .flowstate/tasks/
+git commit -m "Update task state"
+
+# On another machine, import
+git pull
+flowstate state import --strategy update-newer
+```
+
 ## Recommended Workflow
 
 1. **Start of session:**
